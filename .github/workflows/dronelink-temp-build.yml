@@ -1,0 +1,39 @@
+name: DroneLink Temporary IPA Build
+on:
+  push:
+    branches: [ dronelink-temp-build2 ]
+    paths-ignore:
+      - 'output/**'
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract source
+        run: unzip -q DroneLinkIPA-Pro-source.zip
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate and build
+        working-directory: DroneLinkIPA
+        run: |
+          set -euxo pipefail
+          xcodegen generate
+          xcodebuild -project DroneLink.xcodeproj -scheme DroneLink -configuration Release -sdk iphoneos -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+      - name: Package IPA
+        run: |
+          set -euxo pipefail
+          APP="DroneLinkIPA/build/Build/Products/Release-iphoneos/DroneLink.app"
+          rm -rf Payload output
+          mkdir -p Payload output
+          cp -R "$APP" Payload/
+          /usr/bin/zip -qry output/DroneLink-Pro-unsigned.ipa Payload
+          shasum -a 256 output/DroneLink-Pro-unsigned.ipa > output/SHA256.txt
+      - name: Publish IPA to branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f output/DroneLink-Pro-unsigned.ipa output/SHA256.txt
+          git commit -m "Publish DroneLink IPA" || exit 0
+          git push origin HEAD:dronelink-temp-build2
