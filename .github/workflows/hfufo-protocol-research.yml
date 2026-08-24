@@ -24,39 +24,67 @@ jobs:
           test -n "$BASE"
           cp "$BASE" work/base.apk
           sha256sum work/hfufo.xapk work/base.apk > protocol-research/hashes.txt
-      - name: Install JADX 1.5.5
+          unzip -q work/base.apk -d work/base-unpacked
+      - name: Install analysis tools
         run: |
           set -euxo pipefail
           curl -L --fail --retry 3 'https://github.com/skylot/jadx/releases/download/v1.5.5/jadx-1.5.5.zip' -o work/jadx.zip
           mkdir -p work/jadx
           unzip -q work/jadx.zip -d work/jadx
           chmod +x work/jadx/bin/jadx
-          java -version
-      - name: Decompile and extract network/control constants
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq binutils file
+      - name: Decompile Java layer
         run: |
           set -euxo pipefail
           mkdir -p work/decompiled
           work/jadx/bin/jadx --show-bad-code --no-res -d work/decompiled work/base.apk > protocol-research/jadx.log 2>&1 || true
-          {
-            echo '=== HIGH VALUE NETWORK REFERENCES ==='
-            grep -RniE 'Datagram(Socket|Packet)|InetSocketAddress|InetAddress|getByName|Socket\(|192\.168\.|rtsp://|udp|tcp|sendto|recvfrom|50000|40000|8090|8080|7070|8888|8800|9000|8895|8896|20000|20001|60000|5555|5556|10000' work/decompiled 2>/dev/null | head -n 12000 || true
-            echo
-            echo '=== CLASSES WITH JOYSTICK / FLIGHT / CONTROL ==='
-            grep -RniE 'joystick|rocker|throttle|yaw|pitch|roll|takeoff|landing|emergency|calibrat|headless|flycontrol|control.*send|send.*control' work/decompiled 2>/dev/null | head -n 12000 || true
-            echo
-            echo '=== APK / NATIVE PRINTABLE NETWORK STRINGS ==='
-            unzip -q work/base.apk -d work/base-unpacked
-            find work/base-unpacked -type f \( -name '*.so' -o -name 'classes*.dex' \) -print0 | while IFS= read -r -d '' f; do
-              echo "--- $f ---"
-              strings -a "$f" | grep -Ei '192\.168\.|rtsp://|udp|tcp|socket|50000|40000|8090|8080|7070|8888|8800|9000|8895|8896|20000|20001|60000|5555|5556|10000|throttle|takeoff|landing|calibrat' | head -n 3000 || true
-            done
-          } > protocol-research/network-report.txt
           find work/decompiled -type f | wc -l > protocol-research/decompiled-file-count.txt
+      - name: Extract Java JNI and controller references
+        run: |
+          {
+            echo '=== APP PACKAGE FILES ==='
+            find work/decompiled -type f | grep -Ei 'xaufo|hfufo|rxdrone|drone|control|rocker|joystick|flight|wifi|socket' | head -n 6000 || true
+            echo
+            echo '=== JNI / NATIVE LOAD REFERENCES ==='
+            grep -RniE 'System\.loadLibrary| native |native [A-Za-z]|JNI|Jni|NDK' work/decompiled 2>/dev/null | head -n 12000 || true
+            echo
+            echo '=== NETWORK / CONTROL REFERENCES ==='
+            grep -RniEi 'DatagramSocket|DatagramPacket|InetSocketAddress|InetAddress|getByName|Socket\(|send\(|sendto|recvfrom|192\.168\.|rtsp://|udp|tcp|joystick|rocker|throttle|yaw|pitch|roll|take.?off|land|emergency|calibrat|headless|speed' work/decompiled 2>/dev/null | head -n 20000 || true
+          } > protocol-research/java-report.txt
+      - name: Deep inspect native libraries
+        run: |
+          set -euxo pipefail
+          {
+            echo '=== NATIVE LIBRARIES ==='
+            find work/base-unpacked -type f -name '*.so' -print | sort
+            echo
+            for f in $(find work/base-unpacked -type f -name '*.so' | sort); do
+              echo "===== $f ====="
+              file "$f" || true
+              echo '-- dynamic symbols / network calls --'
+              readelf -Ws "$f" 2>/dev/null | grep -Ei 'socket|sendto|recvfrom|connect|bind|inet_|htons|JNI|control|flight|joystick|udp|tcp' | head -n 4000 || true
+              echo '-- printable high-value strings --'
+              strings -a -n 4 "$f" | grep -Ei '192\.168\.|10\.[0-9]+\.|172\.(1[6-9]|2[0-9]|3[01])\.|rtsp://|http://|udp|tcp|socket|sendto|recvfrom|connect|50000|40000|8090|8080|7070|8888|8800|9000|8895|8896|20000|20001|60000|5555|5556|10000|joystick|rocker|throttle|yaw|pitch|roll|take.?off|landing|emergency|calibrat|headless|speed|control' | head -n 8000 || true
+              echo '-- JNI-looking strings --'
+              strings -a -n 4 "$f" | grep -E 'Java_|JNI_OnLoad|com[/._](xaufohf|hfufo)|rxdrone' | head -n 8000 || true
+              echo
+            done
+          } > protocol-research/native-report.txt
+      - name: Dump DEX high-value strings
+        run: |
+          {
+            for f in work/base-unpacked/classes*.dex; do
+              test -f "$f" || continue
+              echo "===== $f ====="
+              strings -a -n 4 "$f" | grep -Ei '192\.168\.|rtsp://|udp|tcp|socket|Datagram|50000|40000|8090|8080|7070|8888|8800|9000|8895|8896|20000|20001|60000|5555|5556|10000|joystick|rocker|throttle|yaw|pitch|roll|take.?off|landing|emergency|calibrat|headless|control|native' | head -n 15000 || true
+            done
+          } > protocol-research/dex-report.txt
       - name: Publish findings
         run: |
           set -euxo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -f protocol-research
-          git commit -m "HF UFO protocol findings ${GITHUB_RUN_NUMBER}"
+          git commit -m "HF UFO deep protocol findings ${GITHUB_RUN_NUMBER}"
           git push origin HEAD:refs/heads/hfufo-protocol-results --force
