@@ -17,7 +17,7 @@ jobs:
         run: |
           set -euxo pipefail
           rm -rf work protocol-research
-          mkdir -p work/xapk protocol-research/smali-matches
+          mkdir -p work/xapk protocol-research/control-smali
           curl -L --fail --retry 4 --retry-delay 3 'https://d.apkpure.net/b/XAPK/com.xaufohf.rxdrone?version=latest' -o work/hfufo.xapk
           unzip -q work/hfufo.xapk -d work/xapk
           BASE=$(find work/xapk -type f -name 'com.xaufohf.rxdrone.apk' | head -n1)
@@ -27,33 +27,33 @@ jobs:
         run: |
           set -euxo pipefail
           curl -L --fail --retry 3 'https://bitbucket.org/iBotPeaches/apktool/downloads/apktool_2.11.1.jar' -o work/apktool.jar
-      - name: Decode smali and capture exact control files
+      - name: Decode exact flight protocol classes
         run: |
           set -euxo pipefail
           java -jar work/apktool.jar d -f -r work/base.apk -o work/smali > protocol-research/apktool.log 2>&1
-          find work/smali -type f -name '*.smali' | wc -l > protocol-research/smali-count.txt
+          names='Protocol1 ProtocolOfQuanzhi FlyCommand ClientManager DeviceClient SettingCmd CommandHub ICommon IConstant HDManualCtrlActivity'
+          : > protocol-research/control-map.txt
+          for name in $names; do
+            while IFS= read -r file; do
+              test -n "$file" || continue
+              base=$(basename "$file")
+              safe=$(echo "$file" | sed 's#work/smali/##; s#[/]#_#g')
+              cp "$file" "protocol-research/control-smali/$safe"
+              printf '%s\t%s\n' "protocol-research/control-smali/$safe" "$file" >> protocol-research/control-map.txt
+            done < <(find work/smali -type f -name "${name}.smali" -o -name "${name}\$*.smali" | sort)
+          done
           {
-            echo '=== DIRECT MATCHES ==='
-            for term in AP_MODE_UDP_PORT AP_UDP_SOCKET_PORT FLIGHT_CONTROL CMD_DEVICE_DIRECTION_CONTROL CMD_SPACE_DIRECTION_CONTROL CMD_CAMERA_CONTROL CMD_POWER_CONTROL AXIS_THROTTLE DEVICE_STATE_UDP_TIMEOUT 'UDP send' '192.168.1.1' '192.168.8.1' '192.168.28.1' '192.168.80.1'; do
-              echo "--- TERM: $term ---"
-              grep -RniF "$term" work/smali 2>/dev/null || true
-            done
-          } > protocol-research/direct-matches.txt
-
-          n=0
-          while IFS= read -r file; do
-            test -n "$file" || continue
-            dst="protocol-research/smali-matches/match-$n.smali"
-            cp "$file" "$dst"
-            printf '%s\t%s\n' "$dst" "$file" >> protocol-research/smali-map.txt
-            n=$((n+1))
-          done < <(grep -RilE 'AP_MODE_UDP_PORT|AP_UDP_SOCKET_PORT|FLIGHT_CONTROL|CMD_DEVICE_DIRECTION_CONTROL|CMD_SPACE_DIRECTION_CONTROL|CMD_CAMERA_CONTROL|CMD_POWER_CONTROL|AXIS_THROTTLE|DEVICE_STATE_UDP_TIMEOUT|UDP send|192\.168\.(1|8|28|80)\.1' work/smali 2>/dev/null | sort -u)
-          printf 'match_files=%s\n' "$n" > protocol-research/smali-summary.txt
-      - name: Publish exact smali matches
+            echo '=== Protocol1 references ==='
+            grep -RniE -B 25 -A 80 'Protocol1;->|ProtocolOfQuanzhi;->|setProtocol|setThrottle|setYaw|setPitch|setRoll|setPower|set.*Direction|packaging\(\)\[B' work/smali/smali_classes3/com/xaufohf/rxdrone 2>/dev/null | head -n 60000 || true
+            echo
+            echo '=== DeviceClient connection references ==='
+            grep -RniE -B 30 -A 100 'DeviceClient|ClientManager|getClient|connectDevice|AP_MODE_UDP_PORT|AP_UDP_SOCKET_PORT|0x8b4|2228|FLIGHT_CONTROL|DRONE_DATA' work/smali 2>/dev/null | head -n 80000 || true
+          } > protocol-research/control-context.txt
+      - name: Publish protocol classes
         run: |
           set -euxo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -f protocol-research
-          git commit -m "HF UFO exact smali matches ${GITHUB_RUN_NUMBER}"
+          git commit -m "HF UFO flight packet classes ${GITHUB_RUN_NUMBER}"
           git push origin HEAD:refs/heads/hfufo-protocol-results --force
