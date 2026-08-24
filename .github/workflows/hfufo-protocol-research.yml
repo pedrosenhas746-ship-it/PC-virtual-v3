@@ -1,0 +1,62 @@
+name: HF UFO Protocol Research
+
+on:
+  push:
+    branches: [ hfufo-protocol-research ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download HF UFO XAPK
+        run: |
+          set -euxo pipefail
+          rm -rf work protocol-research
+          mkdir -p work/xapk protocol-research
+          curl -L --fail --retry 4 --retry-delay 3 'https://d.apkpure.net/b/XAPK/com.xaufohf.rxdrone?version=latest' -o work/hfufo.xapk
+          unzip -q work/hfufo.xapk -d work/xapk
+          BASE=$(find work/xapk -type f -name 'com.xaufohf.rxdrone.apk' | head -n 1)
+          test -n "$BASE"
+          cp "$BASE" work/base.apk
+          sha256sum work/hfufo.xapk work/base.apk > protocol-research/hashes.txt
+      - name: Install JADX 1.5.5
+        run: |
+          set -euxo pipefail
+          curl -L --fail --retry 3 'https://github.com/skylot/jadx/releases/download/v1.5.5/jadx-1.5.5.zip' -o work/jadx.zip
+          mkdir -p work/jadx
+          unzip -q work/jadx.zip -d work/jadx
+          chmod +x work/jadx/bin/jadx
+          java -version
+      - name: Decompile and extract network/control constants
+        run: |
+          set -euxo pipefail
+          mkdir -p work/decompiled
+          work/jadx/bin/jadx --show-bad-code --no-res -d work/decompiled work/base.apk > protocol-research/jadx.log 2>&1 || true
+          {
+            echo '=== HIGH VALUE NETWORK REFERENCES ==='
+            grep -RniE 'Datagram(Socket|Packet)|InetSocketAddress|InetAddress|getByName|Socket\(|192\.168\.|rtsp://|udp|tcp|sendto|recvfrom|50000|40000|8090|8080|7070|8888|8800|9000|8895|8896|20000|20001|60000|5555|5556|10000' work/decompiled 2>/dev/null | head -n 12000 || true
+            echo
+            echo '=== CLASSES WITH JOYSTICK / FLIGHT / CONTROL ==='
+            grep -RniE 'joystick|rocker|throttle|yaw|pitch|roll|takeoff|landing|emergency|calibrat|headless|flycontrol|control.*send|send.*control' work/decompiled 2>/dev/null | head -n 12000 || true
+            echo
+            echo '=== APK / NATIVE PRINTABLE NETWORK STRINGS ==='
+            unzip -q work/base.apk -d work/base-unpacked
+            find work/base-unpacked -type f \( -name '*.so' -o -name 'classes*.dex' \) -print0 | while IFS= read -r -d '' f; do
+              echo "--- $f ---"
+              strings -a "$f" | grep -Ei '192\.168\.|rtsp://|udp|tcp|socket|50000|40000|8090|8080|7070|8888|8800|9000|8895|8896|20000|20001|60000|5555|5556|10000|throttle|takeoff|landing|calibrat' | head -n 3000 || true
+            done
+          } > protocol-research/network-report.txt
+          find work/decompiled -type f | wc -l > protocol-research/decompiled-file-count.txt
+      - name: Publish findings
+        run: |
+          set -euxo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -f protocol-research
+          git commit -m "HF UFO protocol findings ${GITHUB_RUN_NUMBER}"
+          git push origin HEAD:refs/heads/hfufo-protocol-results --force
