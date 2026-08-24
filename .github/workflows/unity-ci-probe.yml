@@ -1,0 +1,22 @@
+name: Unity CI Probe
+on:
+  pull_request:
+    paths: ['UNITY_CI_PROBE.txt', '.github/workflows/unity-ci-probe.yml']
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check presence only
+        env:
+          S_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          S_SERIAL: ${{ secrets.UNITY_SERIAL }}
+          S_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          S_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+          V_LICENSE: ${{ vars.UNITY_LICENSE }}
+          V_SERIAL: ${{ vars.UNITY_SERIAL }}
+          V_EMAIL: ${{ vars.UNITY_EMAIL }}
+          V_PASSWORD: ${{ vars.UNITY_PASSWORD }}
+        run: |
+          for n in S_LICENSE S_SERIAL S_EMAIL S_PASSWORD V_LICENSE V_SERIAL V_EMAIL V_PASSWORD; do
+            if [ -n "${!n}" ]; then echo "${n}_PRESENT=yes"; else echo "${n}_PRESENT=no"; fi
+          done
