@@ -20,6 +20,9 @@ jobs:
           mkdir -p work/xapk work/all-unpacked protocol-research
           curl -L --fail --retry 4 --retry-delay 3 'https://d.apkpure.net/b/XAPK/com.xaufohf.rxdrone?version=latest' -o work/hfufo.xapk
           unzip -q work/hfufo.xapk -d work/xapk
+          BASE=$(find work/xapk -type f -name 'com.xaufohf.rxdrone.apk' | head -n1)
+          test -n "$BASE"
+          cp "$BASE" work/base.apk
           find work/xapk -maxdepth 3 -type f -printf '%P\n' | sort > protocol-research/xapk-files.txt
           find work/xapk -type f -name '*.apk' -print0 | xargs -0 sha256sum > protocol-research/apk-hashes.txt
           i=0
@@ -37,8 +40,26 @@ jobs:
           mkdir -p work/jadx
           unzip -q work/jadx.zip -d work/jadx
           chmod +x work/jadx/bin/jadx
+          curl -L --fail --retry 3 'https://raw.githubusercontent.com/iBotPeaches/Apktool/master/scripts/linux/apktool' -o work/apktool
+          curl -L --fail --retry 3 'https://bitbucket.org/iBotPeaches/apktool/downloads/apktool_2.11.1.jar' -o work/apktool.jar
+          chmod +x work/apktool
           sudo apt-get update -qq
           sudo apt-get install -y -qq binutils file
+      - name: Decode base APK to smali
+        run: |
+          set -euxo pipefail
+          java -jar work/apktool.jar d -f -r work/base.apk -o work/smali >/tmp/apktool.log 2>&1 || true
+          cp /tmp/apktool.log protocol-research/apktool.log
+          {
+            echo '=== UDP / FLIGHT CONSTANT CONTEXT ==='
+            grep -RniE -B 40 -A 120 'AP_MODE_UDP_PORT|AP_UDP_SOCKET_PORT|UDP send|FLIGHT_CONTROL|CMD_DEVICE_DIRECTION_CONTROL|CMD_SPACE_DIRECTION_CONTROL|CMD_CAMERA_CONTROL|CMD_POWER_CONTROL|AXIS_THROTTLE|ACTION_KEY_EMERGENCY_MSG|DEVICE_STATE_UDP_TIMEOUT|DEVICE_STATE_UDP_EXCEPTION' work/smali 2>/dev/null | head -n 50000 || true
+            echo
+            echo '=== IP ADDRESS CONTEXT ==='
+            grep -RniE -B 30 -A 100 '192\.168\.(1|8|28|80)\.1|192\.168\.11\.10' work/smali 2>/dev/null | head -n 30000 || true
+            echo
+            echo '=== DATAGRAM / SOCKET CONTEXT ==='
+            grep -RniE -B 30 -A 100 'DatagramSocket|DatagramPacket|InetSocketAddress|AP_MODE_UDP|UDP_SOCKET|send\(\[B|send\(' work/smali 2>/dev/null | head -n 50000 || true
+          } > protocol-research/smali-context.txt
       - name: Decompile all APK splits together
         run: |
           set -euxo pipefail
@@ -91,5 +112,5 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -f protocol-research
-          git commit -m "HF UFO complete split protocol findings ${GITHUB_RUN_NUMBER}"
+          git commit -m "HF UFO smali protocol findings ${GITHUB_RUN_NUMBER}"
           git push origin HEAD:refs/heads/hfufo-protocol-results --force
